@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Check, RotateCcw, Trophy, Flame, Coffee, Activity, Zap, Wind,
   Dumbbell, BarChart3, Layers, ChevronRight, Target, TrendingUp,
-  AlertTriangle, CheckCircle2, Lock, Edit3
+  AlertTriangle, CheckCircle2, Lock, Edit3, Footprints, Timer, Flame as FlameIcon,
+  User, ArrowDown, ArrowUp, Minus
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, BarChart, Bar, LineChart, Line,
@@ -69,6 +70,74 @@ function getBlock(week) {
   if (week === 6) return 'deload';
   return 'intensification';
 }
+
+// =====================================================================
+// CARDIO PLAN
+// =====================================================================
+const CARDIO_PLAN = {
+  monday:    { type: 'Corrida', distance: 6, pace: 6 },
+  tuesday:   { type: 'Corrida', distance: 6, pace: 6 },
+  wednesday: { type: 'Corrida', distance: 6, pace: 6 },
+  thursday:  { type: 'Caminhada', distance: 6, pace: 8 },
+  // friday, saturday: tênis | sunday: off
+};
+
+// =====================================================================
+// EVOLUÇÃO — Estrutura de medidas corporais
+// =====================================================================
+const MEASUREMENTS = [
+  { id: 'waist',            label: 'Cintura (umbigo)', highlight: true },
+  { id: 'chest',            label: 'Peito' },
+  { id: 'shoulders',        label: 'Ombros (circunf.)' },
+  { id: 'neck',             label: 'Pescoço' },
+  { id: 'hip',              label: 'Quadril' },
+  { id: 'armLeftRelaxed',   label: 'Braço esq. (relaxado)' },
+  { id: 'armRightRelaxed',  label: 'Braço dir. (relaxado)' },
+  { id: 'armLeftFlexed',    label: 'Braço esq. (contraído)' },
+  { id: 'armRightFlexed',   label: 'Braço dir. (contraído)' },
+  { id: 'forearmLeft',      label: 'Antebraço esq.' },
+  { id: 'forearmRight',     label: 'Antebraço dir.' },
+  { id: 'thighLeft',        label: 'Coxa esq.' },
+  { id: 'thighRight',       label: 'Coxa dir.' },
+  { id: 'calfLeft',         label: 'Panturrilha esq.' },
+  { id: 'calfRight',        label: 'Panturrilha dir.' },
+];
+
+const BF_METHODS = [
+  { id: 'scale',    label: 'Balança bioimpedância' },
+  { id: 'inbody',   label: 'InBody / clínica' },
+  { id: 'skinfold', label: 'Dobras cutâneas' },
+  { id: 'dexa',     label: 'DEXA scan' },
+];
+
+function emptyProfile() {
+  const measurements = {};
+  MEASUREMENTS.forEach(m => {
+    measurements[m.id] = { start: '', end: '' };
+  });
+  return {
+    cycleNumber: 1,
+    startDate: '2026-06-01',
+    endDate: '2026-07-26',
+    age: '',
+    height: '',
+    weight: { start: '', end: '' },
+    bodyFat: { start: '', end: '', method: 'scale' },
+    vo2max: { start: '', end: '' },
+    measurements,
+    // Timestamps de quando os dados iniciais/finais foram salvos
+    startSavedAt: null,
+    endSavedAt: null,
+  };
+}
+
+// Goals (definição: queremos REDUZIR essas medidas)
+const SHOULD_REDUCE = ['waist', 'hip', 'bodyFat'];
+// Estas devem MANTER ou aumentar levemente (massa muscular)
+const SHOULD_MAINTAIN = ['chest', 'shoulders', 'neck',
+  'armLeftRelaxed', 'armRightRelaxed', 'armLeftFlexed', 'armRightFlexed',
+  'forearmLeft', 'forearmRight', 'thighLeft', 'thighRight',
+  'calfLeft', 'calfRight'];
 
 // =====================================================================
 // EXERCÍCIOS
@@ -187,6 +256,15 @@ const DAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'satu
 const STORAGE_KEY = 'tracker-periodized-v3';
 const TOTAL_WEEKS = 8;
 
+// =====================================================================
+// CICLO ATUAL — datas fixas (atualize aqui quando criar um novo ciclo)
+// =====================================================================
+const CURRENT_CYCLE = {
+  number: 1,
+  startDate: '2026-06-01',  // 01/06/2026
+  endDate: '2026-07-26',    // 26/07/2026 (56 dias = 8 semanas)
+};
+
 function getConfig(exercise, week) {
   if (exercise.isWarmup) return null;
   return exercise[getBlock(week)];
@@ -211,13 +289,15 @@ function formatDate(iso) {
 // =====================================================================
 export default function App() {
   const [log, setLog] = useState({});
-  const [completions, setCompletions] = useState({}); // {weekDayKey: {completedAt: iso}}
+  const [completions, setCompletions] = useState({});
+  const [sessions, setSessions] = useState({});
+  const [profile, setProfile] = useState(emptyProfile);
   const [loaded, setLoaded] = useState(false);
   const [currentWeek, setCurrentWeek] = useState(1);
   const [currentDay, setCurrentDay] = useState(todayKey);
   const [showReset, setShowReset] = useState(false);
   const [tab, setTab] = useState('training');
-  const [confirmComplete, setConfirmComplete] = useState(null); // {missing: n}
+  const [confirmComplete, setConfirmComplete] = useState(null);
 
   useEffect(() => {
     try {
@@ -226,6 +306,20 @@ export default function App() {
         const p = JSON.parse(raw);
         if (p.log) setLog(p.log);
         if (p.completions) setCompletions(p.completions);
+        if (p.sessions) setSessions(p.sessions);
+        if (p.profile) {
+          // merge com emptyProfile pra garantir todos os campos
+          const empty = emptyProfile();
+          setProfile({
+            ...empty,
+            ...p.profile,
+            // FORÇA as datas e número do ciclo a sempre virem do código (CURRENT_CYCLE)
+            cycleNumber: CURRENT_CYCLE.number,
+            startDate: CURRENT_CYCLE.startDate,
+            endDate: CURRENT_CYCLE.endDate,
+            measurements: { ...empty.measurements, ...(p.profile.measurements || {}) },
+          });
+        }
         if (p.currentWeek) setCurrentWeek(p.currentWeek);
       }
     } catch (e) {}
@@ -235,26 +329,23 @@ export default function App() {
   useEffect(() => {
     if (!loaded) return;
     const t = setTimeout(() => {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ log, completions, currentWeek })); }
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ log, completions, sessions, profile, currentWeek })); }
       catch (e) { console.error('save fail', e); }
     }, 400);
     return () => clearTimeout(t);
-  }, [log, completions, currentWeek, loaded]);
+  }, [log, completions, sessions, profile, currentWeek, loaded]);
 
   const dayLocked = useCallback((week, day) => !!completions[completionKey(week, day)], [completions]);
 
   const updateSet = useCallback((w, d, ex, i, field, val) => {
-    if (dayLocked(w, d)) return;
     setLog(prev => ({ ...prev, [setKey(w,d,ex,i)]: { ...(prev[setKey(w,d,ex,i)] || {}), [field]: val } }));
-  }, [dayLocked]);
+  }, []);
 
   const toggleDone = useCallback((w, d, ex, i) => {
-    if (dayLocked(w, d)) return;
     setLog(prev => ({ ...prev, [setKey(w,d,ex,i)]: { ...(prev[setKey(w,d,ex,i)] || {}), done: !prev[setKey(w,d,ex,i)]?.done } }));
-  }, [dayLocked]);
+  }, []);
 
   const fillTargets = useCallback((week, day, exercise) => {
-    if (dayLocked(week, day)) return;
     const cfg = getConfig(exercise, week);
     if (!cfg) return;
     setLog(prev => {
@@ -268,7 +359,50 @@ export default function App() {
       }
       return next;
     });
-  }, [dayLocked]);
+  }, []);
+
+  // ====== CARDIO + SESSION STATS ======
+  const updateSession = useCallback((week, day, area, field, val) => {
+    const k = completionKey(week, day);
+    setSessions(prev => ({
+      ...prev,
+      [k]: {
+        ...(prev[k] || {}),
+        [area]: { ...(prev[k]?.[area] || {}), [field]: val },
+      },
+    }));
+  }, []);
+
+  const toggleCardioDone = useCallback((week, day) => {
+    const k = completionKey(week, day);
+    setSessions(prev => ({
+      ...prev,
+      [k]: {
+        ...(prev[k] || {}),
+        cardio: { ...(prev[k]?.cardio || {}), done: !prev[k]?.cardio?.done },
+      },
+    }));
+  }, []);
+
+  const fillCardioTargets = useCallback((week, day) => {
+    const plan = CARDIO_PLAN[day];
+    if (!plan) return;
+    const totalTime = Math.round(plan.distance * plan.pace);
+    const k = completionKey(week, day);
+    setSessions(prev => ({
+      ...prev,
+      [k]: {
+        ...(prev[k] || {}),
+        cardio: {
+          distance: String(plan.distance),
+          pace: String(plan.pace),
+          time: String(totalTime),
+          calories: prev[k]?.cardio?.calories || '',
+          done: true,
+        },
+      },
+    }));
+  }, []);
 
   const completeDay = useCallback((week, day) => {
     setCompletions(prev => ({ ...prev, [completionKey(week, day)]: { completedAt: new Date().toISOString() } }));
@@ -298,71 +432,145 @@ export default function App() {
         if (log[setKey(week, day, ex.id, i)]?.done) done++;
       }
     });
+    // inclui cardio se houver plano
+    if (CARDIO_PLAN[day]) {
+      total++;
+      if (sessions[completionKey(week, day)]?.cardio?.done) done++;
+    }
     const missing = total - done;
     if (missing > 0) {
       setConfirmComplete({ week, day, missing, total });
     } else {
       completeDay(week, day);
     }
-  }, [log, completeDay]);
+  }, [log, sessions, completeDay]);
 
   const resetAll = useCallback(() => {
-    setLog({}); setCompletions({}); setCurrentWeek(1); setShowReset(false);
+    setLog({}); setCompletions({}); setSessions({}); setProfile(emptyProfile()); setCurrentWeek(1); setShowReset(false);
     try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
   }, []);
 
-  // STATS
+  // Profile handlers
+  const updateProfile = useCallback((path, value) => {
+    setProfile(prev => {
+      // path é array tipo ['weight', 'start'] ou ['measurements', 'waist', 'end'] ou ['age']
+      if (path.length === 1) {
+        return { ...prev, [path[0]]: value };
+      }
+      if (path.length === 2) {
+        return { ...prev, [path[0]]: { ...prev[path[0]], [path[1]]: value } };
+      }
+      if (path.length === 3) {
+        return {
+          ...prev,
+          [path[0]]: {
+            ...prev[path[0]],
+            [path[1]]: { ...prev[path[0]][path[1]], [path[2]]: value },
+          },
+        };
+      }
+      return prev;
+    });
+  }, []);
+
+  // STATS — agora inclui cardio, tempo e calorias
   const weekStats = useMemo(() => {
     const s = {};
     for (let w = 1; w <= TOTAL_WEEKS; w++) {
       let total = 0, done = 0, tonnage = 0;
+      let kmTotal = 0, timeTotal = 0, calTotal = 0;
       DAY_ORDER.forEach(d => {
         const day = WORKOUT_PLAN[d];
-        if (!day.exercises) return;
-        day.exercises.forEach(ex => {
-          const cfg = getConfig(ex, w);
-          if (!cfg) return;
-          for (let i = 0; i < cfg.sets; i++) {
-            total++;
-            const entry = log[setKey(w, d, ex.id, i)];
-            if (entry?.done) {
-              done++;
-              const wt = parseFloat(entry.weight) || 0;
-              const rp = parseFloat(entry.reps) || 0;
-              tonnage += wt * rp;
+        // séries de musculação
+        if (day.exercises) {
+          day.exercises.forEach(ex => {
+            const cfg = getConfig(ex, w);
+            if (!cfg) return;
+            for (let i = 0; i < cfg.sets; i++) {
+              total++;
+              const entry = log[setKey(w, d, ex.id, i)];
+              if (entry?.done) {
+                done++;
+                const wt = parseFloat(entry.weight) || 0;
+                const rp = parseFloat(entry.reps) || 0;
+                tonnage += wt * rp;
+              }
             }
+          });
+        }
+        // cardio
+        if (CARDIO_PLAN[d]) {
+          total++;
+          const cardio = sessions[completionKey(w, d)]?.cardio;
+          if (cardio?.done) {
+            done++;
+            kmTotal += parseFloat(cardio.distance) || 0;
+            timeTotal += parseFloat(cardio.time) || 0;
+            calTotal += parseFloat(cardio.calories) || 0;
           }
-        });
+        }
+        // strength time + cals
+        const strength = sessions[completionKey(w, d)]?.strength;
+        if (strength) {
+          timeTotal += parseFloat(strength.duration) || 0;
+          calTotal += parseFloat(strength.calories) || 0;
+        }
+        // tennis time + cals (sexta e sábado)
+        const tennis = sessions[completionKey(w, d)]?.tennis;
+        if (tennis) {
+          timeTotal += parseFloat(tennis.duration) || 0;
+          calTotal += parseFloat(tennis.calories) || 0;
+        }
       });
-      s[w] = { total, done, pct: total > 0 ? Math.round((done/total)*100) : 0, tonnage: Math.round(tonnage) };
+      s[w] = {
+        total, done,
+        pct: total > 0 ? Math.round((done/total)*100) : 0,
+        tonnage: Math.round(tonnage),
+        km: Math.round(kmTotal * 10) / 10,
+        time: Math.round(timeTotal),
+        calories: Math.round(calTotal),
+      };
     }
     return s;
-  }, [log]);
+  }, [log, sessions]);
 
   const overallStats = useMemo(() => {
-    let total = 0, done = 0, tonnage = 0;
+    let total = 0, done = 0, tonnage = 0, calories = 0, km = 0, time = 0;
     for (let w = 1; w <= TOTAL_WEEKS; w++) {
       total += weekStats[w]?.total || 0;
       done += weekStats[w]?.done || 0;
       tonnage += weekStats[w]?.tonnage || 0;
+      calories += weekStats[w]?.calories || 0;
+      km += weekStats[w]?.km || 0;
+      time += weekStats[w]?.time || 0;
     }
-    return { total, done, tonnage, pct: total > 0 ? Math.round((done/total)*100) : 0 };
+    return {
+      total, done, tonnage, calories,
+      km: Math.round(km * 10) / 10,
+      time,
+      pct: total > 0 ? Math.round((done/total)*100) : 0,
+    };
   }, [weekStats]);
 
   const dayCompletion = useCallback((week, dayKey) => {
     const day = WORKOUT_PLAN[dayKey];
-    if (!day.exercises) return null;
     let total = 0, done = 0;
-    day.exercises.forEach(ex => {
-      const cfg = getConfig(ex, week);
-      if (!cfg) return;
-      for (let i = 0; i < cfg.sets; i++) {
-        total++;
-        if (log[setKey(week, dayKey, ex.id, i)]?.done) done++;
-      }
-    });
-    return total > 0 ? Math.round((done/total)*100) : 0;
-  }, [log]);
+    if (day.exercises) {
+      day.exercises.forEach(ex => {
+        const cfg = getConfig(ex, week);
+        if (!cfg) return;
+        for (let i = 0; i < cfg.sets; i++) {
+          total++;
+          if (log[setKey(week, dayKey, ex.id, i)]?.done) done++;
+        }
+      });
+    }
+    if (CARDIO_PLAN[dayKey]) {
+      total++;
+      if (sessions[completionKey(week, dayKey)]?.cardio?.done) done++;
+    }
+    return total > 0 ? Math.round((done/total)*100) : null;
+  }, [log, sessions]);
 
   if (!loaded) return <div style={S.loadingScreen}><div style={S.loadingDot}/></div>;
 
@@ -393,6 +601,7 @@ export default function App() {
             { id: 'training', label: 'TREINO', icon: Dumbbell },
             { id: 'progress', label: 'PROGRESSO', icon: BarChart3 },
             { id: 'phases', label: 'FASES', icon: Layers },
+            { id: 'evolution', label: 'EVOLUÇÃO', icon: User },
           ].map(t => {
             const TIcon = t.icon;
             const active = tab === t.id;
@@ -412,17 +621,23 @@ export default function App() {
           currentWeek={currentWeek} setCurrentWeek={setCurrentWeek}
           currentDay={currentDay} setCurrentDay={setCurrentDay}
           weekStats={weekStats} dayCompletion={dayCompletion}
-          log={log} completions={completions}
+          log={log} completions={completions} sessions={sessions}
           onUpdate={updateSet} onToggle={toggleDone} onFill={fillTargets}
+          onUpdateSession={updateSession}
+          onToggleCardio={toggleCardioDone}
+          onFillCardio={fillCardioTargets}
           onComplete={tryCompleteDay} onUnlock={unlockDay}
           blockInfo={blockInfo} block={block}
         />
       )}
       {tab === 'progress' && (
-        <ProgressTab weekStats={weekStats} overallStats={overallStats} log={log} currentWeek={currentWeek} completions={completions}/>
+        <ProgressTab weekStats={weekStats} overallStats={overallStats} log={log} sessions={sessions} currentWeek={currentWeek} completions={completions}/>
       )}
       {tab === 'phases' && (
         <PhasesTab currentWeek={currentWeek} setCurrentWeek={(w) => { setCurrentWeek(w); setTab('training'); }}/>
+      )}
+      {tab === 'evolution' && (
+        <EvolutionTab profile={profile} onUpdate={updateProfile} blockColor={blockInfo.color}/>
       )}
 
       <footer style={S.footer}>Salva automaticamente · Dados ficam no seu dispositivo</footer>
@@ -445,7 +660,7 @@ export default function App() {
           <div style={S.modal} onClick={e => e.stopPropagation()}>
             <div style={S.modalTitle}>Concluir mesmo assim?</div>
             <div style={S.modalText}>
-              Faltam <strong style={{ color: '#f59e0b' }}>{confirmComplete.missing} de {confirmComplete.total}</strong> séries não marcadas. Você pode concluir agora ou voltar e marcar as restantes.
+              Faltam <strong style={{ color: '#f59e0b' }}>{confirmComplete.missing} de {confirmComplete.total}</strong> séries/itens não marcados.
             </div>
             <div style={S.modalBtns}>
               <button onClick={() => setConfirmComplete(null)} style={S.modalCancel}>Voltar</button>
@@ -465,16 +680,43 @@ export default function App() {
 // =====================================================================
 function TrainingTab({
   currentWeek, setCurrentWeek, currentDay, setCurrentDay,
-  weekStats, dayCompletion, log, completions,
-  onUpdate, onToggle, onFill, onComplete, onUnlock,
+  weekStats, dayCompletion, log, completions, sessions,
+  onUpdate, onToggle, onFill,
+  onUpdateSession, onToggleCardio, onFillCardio,
+  onComplete, onUnlock,
   blockInfo, block
 }) {
   const day = WORKOUT_PLAN[currentDay];
+  const cardio = CARDIO_PLAN[currentDay];
   const completion = completions[completionKey(currentWeek, currentDay)];
   const isLocked = !!completion;
+  const sessionData = sessions[completionKey(currentWeek, currentDay)] || {};
+
+  // Info do ciclo atual
+  const formatBR = (iso) => {
+    if (!iso) return '';
+    const [y, m, d] = iso.split('-');
+    return `${d}/${m}/${y}`;
+  };
 
   return (
     <>
+      {/* BANNER DO CICLO */}
+      <div style={S.cycleBanner}>
+        <div style={S.cycleBannerInner}>
+          <div style={S.cycleNumberWrap}>
+            <div style={S.cycleNumberLabel}>CICLO</div>
+            <div style={S.cycleNumber}>{String(CURRENT_CYCLE.number).padStart(2, '0')}</div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={S.cycleDates}>
+              {formatBR(CURRENT_CYCLE.startDate)} → {formatBR(CURRENT_CYCLE.endDate)}
+            </div>
+            <div style={S.cycleSubtitle}>8 semanas · 3 blocos</div>
+          </div>
+        </div>
+      </div>
+
       <div style={{ ...S.blockBanner, borderColor: blockInfo.color + '60' }}>
         <div style={S.blockBannerInner}>
           <div style={S.blockIconWrap}>
@@ -545,7 +787,6 @@ function TrainingTab({
         </div>
       </section>
 
-      {/* COMPLETION BANNER */}
       {isLocked && (
         <div style={S.completionBanner}>
           <div style={S.completionBannerInner}>
@@ -556,7 +797,7 @@ function TrainingTab({
             </div>
             <button onClick={() => onUnlock(currentWeek, currentDay)} style={S.unlockBtn}>
               <Edit3 size={12}/>
-              <span>EDITAR</span>
+              <span>DESMARCAR</span>
             </button>
           </div>
         </div>
@@ -568,10 +809,10 @@ function TrainingTab({
             <div style={S.dayHeaderLabel}>{day.name}</div>
             <div style={S.dayHeaderTitle}>{day.focus}</div>
           </div>
-          {day.exercises && (
+          {(day.exercises || cardio) && (
             <div style={S.dayHeaderStat}>
               <div style={{ ...S.statBig, color: isLocked ? '#22c55e' : blockInfo.color }}>
-                {dayCompletion(currentWeek, currentDay)}%
+                {dayCompletion(currentWeek, currentDay) ?? 0}%
               </div>
               <div style={S.statLabel}>completo</div>
             </div>
@@ -580,22 +821,61 @@ function TrainingTab({
 
         {day.isRest && <RestCard/>}
         {day.sportOnly && <SportCard description={day.description}/>}
-        {day.exercises && (
-          <div style={S.exercises}>
-            {day.sportNote && (
-              <div style={S.sportNote}><Activity size={14} style={{ color: '#f59e0b' }}/><span>{day.sportNote}</span></div>
-            )}
-            {day.exercises.map(ex => (
-              <ExerciseCard key={ex.id} exercise={ex}
-                week={currentWeek} day={currentDay} blockColor={blockInfo.color}
-                log={log} locked={isLocked}
-                onUpdate={onUpdate} onToggle={onToggle} onFill={onFill}/>
-            ))}
-          </div>
+
+        {/* CARDIO CARD */}
+        {cardio && (
+          <CardioCard
+            cardioPlan={cardio}
+            week={currentWeek}
+            day={currentDay}
+            data={sessionData.cardio || {}}
+            locked={false}
+            blockColor={blockInfo.color}
+            onUpdate={onUpdateSession}
+            onToggle={onToggleCardio}
+            onFill={onFillCardio}
+          />
         )}
 
-        {/* CONCLUIR / EDITAR — só pra dias com exercícios */}
+        {/* CARD DE TÊNIS — sexta (sportOnly) ou sábado (sportNote) */}
+        {(day.sportOnly || day.sportNote) && (
+          <TennisStatsCard
+            week={currentWeek}
+            day={currentDay}
+            data={sessionData.tennis || {}}
+            locked={false}
+            onUpdate={onUpdateSession}
+          />
+        )}
+
         {day.exercises && (
+          <>
+            <div style={{ ...S.sectionHeader, marginTop: 20 }}>
+              <Dumbbell size={14} style={{ color: '#737373' }}/>
+              <span style={S.sectionHeaderText}>MUSCULAÇÃO</span>
+            </div>
+            <div style={S.exercises}>
+              {day.exercises.map(ex => (
+                <ExerciseCard key={ex.id} exercise={ex}
+                  week={currentWeek} day={currentDay} blockColor={blockInfo.color}
+                  log={log} locked={false}
+                  onUpdate={onUpdate} onToggle={onToggle} onFill={onFill}/>
+              ))}
+            </div>
+
+            {/* TEMPO + CALORIAS DO TREINO DE FORÇA */}
+            <StrengthStatsCard
+              week={currentWeek}
+              day={currentDay}
+              data={sessionData.strength || {}}
+              locked={false}
+              onUpdate={onUpdateSession}
+            />
+          </>
+        )}
+
+        {/* Botão CONCLUIR — aparece em qualquer dia que não seja OFF */}
+        {!day.isRest && (
           <div style={S.completeWrap}>
             {!isLocked ? (
               <button
@@ -607,8 +887,8 @@ function TrainingTab({
               </button>
             ) : (
               <div style={S.completedLine}>
-                <Lock size={12} style={{ color: '#525252' }}/>
-                <span>Treino trancado · Toque em EDITAR no topo para alterar</span>
+                <CheckCircle2 size={12} style={{ color: '#22c55e' }}/>
+                <span>Treino marcado como concluído · Continua editável</span>
               </div>
             )}
           </div>
@@ -619,9 +899,246 @@ function TrainingTab({
 }
 
 // =====================================================================
+// CARDIO CARD
+// =====================================================================
+function CardioCard({ cardioPlan, week, day, data, locked, blockColor, onUpdate, onToggle, onFill }) {
+  const done = !!data.done;
+  return (
+    <>
+      <div style={S.sectionHeader}>
+        <Footprints size={14} style={{ color: '#737373' }}/>
+        <span style={S.sectionHeaderText}>CARDIO</span>
+      </div>
+      <div style={{ ...S.exCard, ...(done ? { borderColor: '#14532d', background: 'rgba(34, 197, 94, 0.04)' } : {}) }}>
+        <div style={S.exHeader}>
+          <div style={S.exNameWrap}>
+            <div style={S.exNameRow}>
+              <span style={S.exName}>{cardioPlan.type}</span>
+              <span style={{ ...S.exTypeTag, color: '#60a5fa', borderColor: '#1e3a5f' }}>AERÓBICO</span>
+            </div>
+            <div style={{ ...S.exTarget, color: blockColor }}>
+              {cardioPlan.distance}km · pace {cardioPlan.pace}min/km
+            </div>
+          </div>
+          {!locked && (
+            <button onClick={() => onFill(week, day)} style={S.fillBtn}>AUTO</button>
+          )}
+        </div>
+
+        <div style={S.cardioGrid}>
+          <CardioField
+            label="KM" placeholder={String(cardioPlan.distance)}
+            value={data.distance ?? ''} locked={locked}
+            onChange={v => onUpdate(week, day, 'cardio', 'distance', v)}
+          />
+          <CardioField
+            label="PACE" placeholder={String(cardioPlan.pace)}
+            value={data.pace ?? ''} locked={locked}
+            onChange={v => onUpdate(week, day, 'cardio', 'pace', v)}
+          />
+          <CardioField
+            label="MIN" placeholder={String(Math.round(cardioPlan.distance * cardioPlan.pace))}
+            value={data.time ?? ''} locked={locked}
+            onChange={v => onUpdate(week, day, 'cardio', 'time', v)}
+          />
+          <CardioField
+            label="KCAL" placeholder="—"
+            value={data.calories ?? ''} locked={locked}
+            onChange={v => onUpdate(week, day, 'cardio', 'calories', v)}
+          />
+          <button
+            onClick={() => onToggle(week, day)}
+            disabled={locked}
+            style={{ ...S.checkBtnWide, ...(done ? S.checkBtnDone : {}), ...(locked ? { cursor: 'not-allowed' } : {}) }}
+          >
+            {done ? <Check size={14} strokeWidth={3}/> : <span style={{ fontSize: 9, letterSpacing: '0.15em', fontWeight: 700 }}>FEITO</span>}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function CardioField({ label, placeholder, value, locked, onChange }) {
+  return (
+    <div style={S.cardioFieldWrap}>
+      <div style={S.cardioFieldLabel}>{label}</div>
+      <input
+        type="text" inputMode="decimal"
+        value={value} disabled={locked}
+        placeholder={placeholder}
+        onChange={e => onChange(e.target.value)}
+        style={{ ...S.input, ...(locked ? S.inputLocked : {}) }}
+      />
+    </div>
+  );
+}
+
+// =====================================================================
+// SESSION STATS (Tempo + Calorias por sessão — strength, tennis, etc)
+// =====================================================================
+function SessionStatsCard({ week, day, data, locked, area, title, icon: Icon, color, onUpdate, hint }) {
+  return (
+    <>
+      <div style={{ ...S.sectionHeader, marginTop: 20 }}>
+        <Icon size={14} style={{ color: color || '#737373' }}/>
+        <span style={{ ...S.sectionHeaderText, ...(color ? { color } : {}) }}>{title}</span>
+      </div>
+      <div style={S.exCard}>
+        <div style={S.statsCardGrid}>
+          <CardioField
+            label="TEMPO (MIN)" placeholder="—"
+            value={data.duration ?? ''} locked={locked}
+            onChange={v => onUpdate(week, day, area, 'duration', v)}
+          />
+          <CardioField
+            label="CALORIAS (KCAL)" placeholder="—"
+            value={data.calories ?? ''} locked={locked}
+            onChange={v => onUpdate(week, day, area, 'calories', v)}
+          />
+        </div>
+        {hint && <div style={S.statsCardHint}>{hint}</div>}
+      </div>
+    </>
+  );
+}
+
+// Compatibilidade: mantém StrengthStatsCard como wrapper
+function StrengthStatsCard({ week, day, data, locked, onUpdate }) {
+  return (
+    <SessionStatsCard
+      week={week} day={day} data={data} locked={locked}
+      area="strength" title="RESUMO DA SESSÃO · FORÇA"
+      icon={Timer} onUpdate={onUpdate}
+      hint="Anote depois do treino. Use a fonte que preferir (Apple Watch, esteira, estimativa) — só mantenha a mesma ao longo das semanas pra ter consistência."
+    />
+  );
+}
+
+// Card específico do tênis
+function TennisStatsCard({ week, day, data, locked, onUpdate }) {
+  return (
+    <SessionStatsCard
+      week={week} day={day} data={data} locked={locked}
+      area="tennis" title="RESUMO DA SESSÃO · TÊNIS"
+      icon={Activity} color="#fbbf24" onUpdate={onUpdate}
+      hint="Anote o tempo total da aula e as calorias gastas. Use o relógio ou estimativa — só mantenha a mesma fonte."
+    />
+  );
+}
+
+// =====================================================================
 // PROGRESS TAB
 // =====================================================================
-function ProgressTab({ weekStats, overallStats, log, currentWeek, completions }) {
+function ProgressTab({ weekStats, overallStats, log, sessions, currentWeek, completions }) {
+  // Seletor de período: 'all' (geral), 'currentWeek' (semana atual), 'last7days' (últimos 7 dias)
+  const [period, setPeriod] = useState('all');
+
+  // Calcula stats filtrados por período
+  const periodStats = useMemo(() => {
+    if (period === 'all') {
+      return {
+        ...overallStats,
+        completedDays: Object.keys(completions).length,
+        label: 'TUDO',
+        subtitle: '8 semanas do ciclo',
+      };
+    }
+
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    let total = 0, done = 0, tonnage = 0, km = 0, time = 0, calories = 0, completedDays = 0;
+
+    for (let w = 1; w <= TOTAL_WEEKS; w++) {
+      for (const d of DAY_ORDER) {
+        const key = completionKey(w, d);
+        const completion = completions[key];
+
+        // Aplica filtro
+        if (period === 'currentWeek' && w !== currentWeek) continue;
+        if (period === 'last7days') {
+          if (!completion) continue;
+          const compDate = new Date(completion.completedAt);
+          if (compDate < sevenDaysAgo) continue;
+        }
+
+        if (completion) completedDays++;
+
+        const day = WORKOUT_PLAN[d];
+
+        // Séries de musculação
+        if (day.exercises) {
+          for (const ex of day.exercises) {
+            const cfg = getConfig(ex, w);
+            if (!cfg) continue;
+            for (let i = 0; i < cfg.sets; i++) {
+              total++;
+              const entry = log[setKey(w, d, ex.id, i)];
+              if (entry?.done) {
+                done++;
+                const wt = parseFloat(entry.weight) || 0;
+                const rp = parseFloat(entry.reps) || 0;
+                tonnage += wt * rp;
+              }
+            }
+          }
+        }
+
+        // Cardio
+        if (CARDIO_PLAN[d]) {
+          total++;
+          const cardio = sessions[key]?.cardio;
+          if (cardio?.done) {
+            done++;
+            km += parseFloat(cardio.distance) || 0;
+            time += parseFloat(cardio.time) || 0;
+            calories += parseFloat(cardio.calories) || 0;
+          }
+        }
+
+        // Strength stats
+        const strength = sessions[key]?.strength;
+        if (strength) {
+          time += parseFloat(strength.duration) || 0;
+          calories += parseFloat(strength.calories) || 0;
+        }
+
+        // Tennis stats
+        const tennis = sessions[key]?.tennis;
+        if (tennis) {
+          time += parseFloat(tennis.duration) || 0;
+          calories += parseFloat(tennis.calories) || 0;
+        }
+      }
+    }
+
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    const labels = {
+      currentWeek: { label: `SEMANA ${String(currentWeek).padStart(2, '0')}`, subtitle: `Semana selecionada do ciclo` },
+      last7days: { label: 'ÚLTIMOS 7 DIAS', subtitle: 'Dias concluídos na última semana' },
+    };
+
+    return {
+      total, done, tonnage,
+      km: Math.round(km * 10) / 10,
+      time: Math.round(time),
+      calories: Math.round(calories),
+      completedDays, pct,
+      ...labels[period],
+    };
+  }, [period, overallStats, completions, sessions, log, currentWeek]);
+
+  // Médias por dia de treino (útil pra nutri)
+  const avgPerDay = useMemo(() => {
+    if (periodStats.completedDays === 0) return null;
+    return {
+      calories: Math.round(periodStats.calories / periodStats.completedDays),
+      time: Math.round(periodStats.time / periodStats.completedDays),
+    };
+  }, [periodStats]);
+
   const donutData = [
     { name: 'Feito', value: overallStats.done, color: '#22c55e' },
     { name: 'Pendente', value: Math.max(0, overallStats.total - overallStats.done), color: '#1f1f1f' },
@@ -635,6 +1152,18 @@ function ProgressTab({ weekStats, overallStats, log, currentWeek, completions })
 
   const tonnageData = Array.from({ length: TOTAL_WEEKS }, (_, i) => ({
     week: `S${i+1}`, tonnage: weekStats[i+1]?.tonnage || 0,
+  }));
+
+  const cardioData = Array.from({ length: TOTAL_WEEKS }, (_, i) => ({
+    week: `S${i+1}`, km: weekStats[i+1]?.km || 0,
+  }));
+
+  const caloriesData = Array.from({ length: TOTAL_WEEKS }, (_, i) => ({
+    week: `S${i+1}`, calories: weekStats[i+1]?.calories || 0,
+  }));
+
+  const timeData = Array.from({ length: TOTAL_WEEKS }, (_, i) => ({
+    week: `S${i+1}`, time: weekStats[i+1]?.time || 0,
   }));
 
   const KEY_EXERCISES = [
@@ -671,11 +1200,66 @@ function ProgressTab({ weekStats, overallStats, log, currentWeek, completions })
 
   return (
     <div style={S.progressWrap}>
-      <div style={S.statsRow}>
-        <StatCard label="DIAS CONCLUÍDOS" value={totalCompletedDays} subvalue="treinos trancados" color="#22c55e"/>
-        <StatCard label="SÉRIES FEITAS" value={overallStats.done} subvalue={`de ${overallStats.total}`} color="#f59e0b"/>
-        <StatCard label="VOLUME TOTAL" value={`${(overallStats.tonnage/1000).toFixed(1)}t`} subvalue="kg movidos" color="#60a5fa"/>
+      {/* SELETOR DE PERÍODO */}
+      <div style={S.periodSelector}>
+        {[
+          { id: 'all', label: 'TUDO', sublabel: '8 sem' },
+          { id: 'currentWeek', label: 'SEMANA', sublabel: `S${currentWeek}` },
+          { id: 'last7days', label: 'ÚLTIMOS', sublabel: '7 dias' },
+        ].map(p => (
+          <button key={p.id}
+            onClick={() => setPeriod(p.id)}
+            style={{
+              ...S.periodBtn,
+              ...(period === p.id ? S.periodBtnActive : {}),
+            }}>
+            <span style={S.periodBtnLabel}>{p.label}</span>
+            <span style={S.periodBtnSublabel}>{p.sublabel}</span>
+          </button>
+        ))}
       </div>
+
+      <div style={S.periodHeader}>
+        <div style={S.periodHeaderLabel}>{periodStats.label}</div>
+        <div style={S.periodHeaderSubtitle}>{periodStats.subtitle}</div>
+      </div>
+
+      <div style={S.statsRow}>
+        <StatCard label="DIAS" value={periodStats.completedDays} subvalue="concluídos" color="#22c55e"/>
+        <StatCard label="VOLUME" value={`${(periodStats.tonnage/1000).toFixed(1)}t`} subvalue="kg movidos" color="#f59e0b"/>
+        <StatCard label="CARDIO" value={`${periodStats.km}`} subvalue="km totais" color="#60a5fa"/>
+      </div>
+      <div style={S.statsRow}>
+        <StatCard label="TEMPO" value={`${Math.floor(periodStats.time/60)}h`} subvalue={`${periodStats.time}min`} color="#a78bfa"/>
+        <StatCard label="CALORIAS" value={`${(periodStats.calories/1000).toFixed(1)}k`} subvalue="kcal" color="#ef4444"/>
+        <StatCard label="SÉRIES" value={periodStats.done} subvalue={period === 'all' ? `de ${periodStats.total}` : 'feitas'} color="#fafafa"/>
+      </div>
+
+      {/* MÉDIAS POR DIA DE TREINO (útil pra nutri) */}
+      {avgPerDay && periodStats.completedDays > 0 && (
+        <div style={S.avgCard}>
+          <div style={S.avgCardHeader}>
+            <span style={S.avgCardLabel}>MÉDIA POR DIA DE TREINO</span>
+            <span style={S.avgCardCount}>{periodStats.completedDays} {periodStats.completedDays === 1 ? 'dia' : 'dias'}</span>
+          </div>
+          <div style={S.avgCardGrid}>
+            <div style={S.avgItem}>
+              <div style={S.avgItemValue}>{avgPerDay.calories}</div>
+              <div style={S.avgItemLabel}>kcal por dia</div>
+            </div>
+            <div style={S.avgItemDivider}/>
+            <div style={S.avgItem}>
+              <div style={S.avgItemValue}>{avgPerDay.time}</div>
+              <div style={S.avgItemLabel}>min por dia</div>
+            </div>
+            <div style={S.avgItemDivider}/>
+            <div style={S.avgItem}>
+              <div style={S.avgItemValue}>{Math.round(avgPerDay.calories * 7)}</div>
+              <div style={S.avgItemLabel}>kcal · proj. semana</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={S.chartCard}>
         <div style={S.chartHeader}>
@@ -704,7 +1288,7 @@ function ProgressTab({ weekStats, overallStats, log, currentWeek, completions })
         <div style={S.chartHeader}>
           <div>
             <div style={S.chartTitle}>COMPLETUDE POR SEMANA</div>
-            <div style={S.chartSubtitle}>% de séries feitas em cada semana</div>
+            <div style={S.chartSubtitle}>% de itens feitos em cada semana</div>
           </div>
           <BarChart3 size={20} style={{ color: '#525252' }}/>
         </div>
@@ -745,7 +1329,71 @@ function ProgressTab({ weekStats, overallStats, log, currentWeek, completions })
           </ResponsiveContainer>
         </div>
         <div style={S.chartFootnote}>
-          Esperado: volume sobe nas semanas 1-5, cai na 6 (deload), sobe novamente em 7-8
+          Esperado: sobe nas semanas 1-5, cai na 6 (deload), sobe em 7-8
+        </div>
+      </div>
+
+      <div style={S.chartCard}>
+        <div style={S.chartHeader}>
+          <div>
+            <div style={S.chartTitle}>CARDIO POR SEMANA</div>
+            <div style={S.chartSubtitle}>Distância acumulada (km)</div>
+          </div>
+          <Footprints size={20} style={{ color: '#525252' }}/>
+        </div>
+        <div style={{ height: 200 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={cardioData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="2 4" stroke="#1f1f1f" vertical={false}/>
+              <XAxis dataKey="week" stroke="#525252" fontSize={10} tickLine={false}/>
+              <YAxis stroke="#525252" fontSize={10} tickLine={false}/>
+              <Tooltip contentStyle={chartTooltipStyle} formatter={(v) => [`${v} km`, 'Distância']} cursor={{ fill: 'rgba(255,255,255,0.03)' }}/>
+              <Bar dataKey="km" radius={[4, 4, 0, 0]} fill="#60a5fa"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div style={S.chartCard}>
+        <div style={S.chartHeader}>
+          <div>
+            <div style={S.chartTitle}>CALORIAS POR SEMANA</div>
+            <div style={S.chartSubtitle}>Cardio + musculação somados</div>
+          </div>
+          <FlameIcon size={20} style={{ color: '#525252' }}/>
+        </div>
+        <div style={{ height: 200 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={caloriesData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="2 4" stroke="#1f1f1f" vertical={false}/>
+              <XAxis dataKey="week" stroke="#525252" fontSize={10} tickLine={false}/>
+              <YAxis stroke="#525252" fontSize={10} tickLine={false}/>
+              <Tooltip contentStyle={chartTooltipStyle} formatter={(v) => [`${v} kcal`, 'Calorias']}/>
+              <Line type="monotone" dataKey="calories" stroke="#ef4444" strokeWidth={2}
+                dot={{ fill: '#ef4444', r: 4 }} activeDot={{ r: 6 }}/>
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div style={S.chartCard}>
+        <div style={S.chartHeader}>
+          <div>
+            <div style={S.chartTitle}>TEMPO POR SEMANA</div>
+            <div style={S.chartSubtitle}>Minutos de treino (cardio + força)</div>
+          </div>
+          <Timer size={20} style={{ color: '#525252' }}/>
+        </div>
+        <div style={{ height: 200 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={timeData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="2 4" stroke="#1f1f1f" vertical={false}/>
+              <XAxis dataKey="week" stroke="#525252" fontSize={10} tickLine={false}/>
+              <YAxis stroke="#525252" fontSize={10} tickLine={false}/>
+              <Tooltip contentStyle={chartTooltipStyle} formatter={(v) => [`${v} min`, 'Tempo']} cursor={{ fill: 'rgba(255,255,255,0.03)' }}/>
+              <Bar dataKey="time" radius={[4, 4, 0, 0]} fill="#a78bfa"/>
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </div>
 
@@ -854,7 +1502,6 @@ function PhasesTab({ currentWeek, setCurrentWeek }) {
                 </div>
                 <PhaseRow label="DESCANSO" value={phase.rest}/>
                 <PhaseRow label="O QUE ESPERAR" value={phase.expect}/>
-
                 <div style={S.phaseTipsBox}>
                   <div style={{ ...S.phaseTipsLabel, color: phase.color }}>DICAS</div>
                   <ul style={S.phaseTipsList}>
@@ -866,7 +1513,6 @@ function PhasesTab({ currentWeek, setCurrentWeek }) {
                     ))}
                   </ul>
                 </div>
-
                 <button
                   onClick={() => {
                     const targetWeek = key === 'hypertrophy' ? 1 : key === 'deload' ? 6 : 7;
@@ -898,6 +1544,504 @@ function PhaseMini({ label, value }) {
     <div style={S.phaseMini}>
       <div style={S.phaseRowLabel}>{label}</div>
       <div style={S.phaseMiniValue}>{value}</div>
+    </div>
+  );
+}
+
+// =====================================================================
+// EVOLUTION TAB — Dados do atleta, medidas e comparação
+// =====================================================================
+function EvolutionTab({ profile, onUpdate, blockColor }) {
+  // Datas vêm do CURRENT_CYCLE (não editáveis aqui)
+  const startDate = CURRENT_CYCLE.startDate;
+  const endDate = CURRENT_CYCLE.endDate;
+
+  const startSaved = !!profile.startSavedAt;
+  const endSaved = !!profile.endSavedAt;
+
+  const formatBR = (iso) => {
+    if (!iso) return '—';
+    try {
+      const [y, m, d] = iso.split('-');
+      return `${d}/${m}/${y}`;
+    } catch { return iso; }
+  };
+
+  const formatDateTime = (iso) => {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const hour = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      return `${day}/${month} · ${hour}:${min}`;
+    } catch { return ''; }
+  };
+
+  const daysRemaining = useMemo(() => {
+    if (!endDate) return null;
+    const now = new Date();
+    now.setHours(0,0,0,0);
+    const end = new Date(endDate);
+    return Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+  }, [endDate]);
+
+  const daysFromStart = useMemo(() => {
+    if (!startDate) return null;
+    const now = new Date();
+    now.setHours(0,0,0,0);
+    const start = new Date(startDate);
+    return Math.floor((now - start) / (1000 * 60 * 60 * 24));
+  }, [startDate]);
+
+  const saveStart = () => onUpdate(['startSavedAt'], new Date().toISOString());
+  const unsaveStart = () => onUpdate(['startSavedAt'], null);
+  const saveEnd = () => onUpdate(['endSavedAt'], new Date().toISOString());
+  const unsaveEnd = () => onUpdate(['endSavedAt'], null);
+
+  // Conta quantas medidas iniciais foram preenchidas
+  const startFilledCount = useMemo(() => {
+    let c = 0;
+    if (profile.weight.start) c++;
+    if (profile.bodyFat.start) c++;
+    if (profile.vo2max.start) c++;
+    MEASUREMENTS.forEach(m => {
+      if (profile.measurements[m.id]?.start) c++;
+    });
+    return c;
+  }, [profile]);
+
+  const endFilledCount = useMemo(() => {
+    let c = 0;
+    if (profile.weight.end) c++;
+    if (profile.bodyFat.end) c++;
+    if (profile.vo2max.end) c++;
+    MEASUREMENTS.forEach(m => {
+      if (profile.measurements[m.id]?.end) c++;
+    });
+    return c;
+  }, [profile]);
+
+  const totalFields = 3 + MEASUREMENTS.length;
+
+  return (
+    <div style={S.evoWrap}>
+      <div style={S.evoIntro}>
+        <div style={S.evoIntroTitle}>EVOLUÇÃO · CICLO {String(CURRENT_CYCLE.number).padStart(2, '0')}</div>
+        <div style={S.evoIntroText}>
+          Registra suas medidas no início e no fim das 8 semanas pra comparar a evolução real do ciclo.
+        </div>
+      </div>
+
+      {/* DADOS DO CICLO */}
+      <div style={S.evoCard}>
+        <div style={S.evoCardTitle}>
+          <span style={{ color: blockColor }}>DADOS DO CICLO</span>
+          <span style={S.cycleLinkBadge}>🔗 sincronizado</span>
+        </div>
+        <div style={S.evoFieldGrid}>
+          <div>
+            <div style={S.evoFieldLabel}>INÍCIO DO CICLO</div>
+            <div style={S.evoFieldStatic}>{formatBR(startDate)}</div>
+          </div>
+          <div>
+            <div style={S.evoFieldLabel}>FIM DO CICLO</div>
+            <div style={S.evoFieldStatic}>{formatBR(endDate)}</div>
+          </div>
+          <EvoField
+            label="IDADE" placeholder="anos"
+            value={profile.age}
+            onChange={v => onUpdate(['age'], v)}
+          />
+          <EvoField
+            label="ALTURA" placeholder="cm"
+            value={profile.height}
+            onChange={v => onUpdate(['height'], v)}
+          />
+        </div>
+        {daysRemaining != null && (
+          <div style={S.evoCountdown}>
+            {daysRemaining > 0 && daysFromStart >= 0
+              ? <><span style={{ color: blockColor, fontWeight: 700 }}>{daysRemaining} dias</span> até o fim do ciclo · Dia {daysFromStart + 1} de 56</>
+              : daysRemaining > 0 && daysFromStart < 0
+                ? <><span style={{ color: '#737373' }}>O ciclo começa em {-daysFromStart} dias</span></>
+                : daysRemaining === 0
+                  ? <span style={{ color: '#22c55e', fontWeight: 700 }}>Hoje é o último dia do ciclo!</span>
+                  : <span style={{ color: '#737373' }}>Ciclo encerrado há {-daysRemaining} dias · preencha os dados de FIM</span>
+            }
+          </div>
+        )}
+      </div>
+
+      {/* MÉTRICAS PRINCIPAIS */}
+      <div style={S.evoCard}>
+        <div style={S.evoCardTitle}>
+          <span style={{ color: blockColor }}>MÉTRICAS PRINCIPAIS</span>
+        </div>
+
+        <MetricRow
+          label="PESO" unit="kg"
+          startValue={profile.weight.start} endValue={profile.weight.end}
+          onStartChange={v => onUpdate(['weight', 'start'], v)}
+          onEndChange={v => onUpdate(['weight', 'end'], v)}
+          startLocked={startSaved} endLocked={endSaved}
+          shouldReduce={false} highlight
+        />
+
+        <MetricRow
+          label="% GORDURA" unit="%"
+          startValue={profile.bodyFat.start} endValue={profile.bodyFat.end}
+          onStartChange={v => onUpdate(['bodyFat', 'start'], v)}
+          onEndChange={v => onUpdate(['bodyFat', 'end'], v)}
+          startLocked={startSaved} endLocked={endSaved}
+          shouldReduce={true} highlight
+        />
+        <div style={S.evoMethodSelect}>
+          <div style={S.evoFieldLabel}>MÉTODO DE MEDIÇÃO</div>
+          <select
+            value={profile.bodyFat.method}
+            onChange={e => onUpdate(['bodyFat', 'method'], e.target.value)}
+            style={S.evoSelect}
+          >
+            {BF_METHODS.map(m => (
+              <option key={m.id} value={m.id} style={{ background: '#0a0a0a' }}>{m.label}</option>
+            ))}
+          </select>
+          <div style={S.evoMethodHint}>
+            ⚠️ Use o mesmo método nas duas pontas pra ter dados comparáveis
+          </div>
+        </div>
+
+        <MetricRow
+          label="VO2 MAX" unit="ml/kg/min"
+          startValue={profile.vo2max.start} endValue={profile.vo2max.end}
+          onStartChange={v => onUpdate(['vo2max', 'start'], v)}
+          onEndChange={v => onUpdate(['vo2max', 'end'], v)}
+          startLocked={startSaved} endLocked={endSaved}
+          shouldReduce={false}
+        />
+      </div>
+
+      {/* MEDIDAS CORPORAIS */}
+      <div style={S.evoCard}>
+        <div style={S.evoCardTitle}>
+          <span style={{ color: blockColor }}>MEDIDAS (cm)</span>
+        </div>
+        <div style={S.evoMeasurementsHeader}>
+          <span style={S.evoMeasureLabel}></span>
+          <span style={S.evoMeasureColHeader}>INÍCIO</span>
+          <span style={S.evoMeasureColHeader}>FIM</span>
+          <span style={S.evoMeasureColHeader}>Δ</span>
+        </div>
+        {MEASUREMENTS.map(m => (
+          <MeasurementRow
+            key={m.id}
+            label={m.label}
+            highlight={m.highlight}
+            startValue={profile.measurements[m.id]?.start ?? ''}
+            endValue={profile.measurements[m.id]?.end ?? ''}
+            shouldReduce={SHOULD_REDUCE.includes(m.id)}
+            onStartChange={v => onUpdate(['measurements', m.id, 'start'], v)}
+            onEndChange={v => onUpdate(['measurements', m.id, 'end'], v)}
+            startLocked={startSaved} endLocked={endSaved}
+          />
+        ))}
+      </div>
+
+      {/* BOTÕES DE SALVAR */}
+      <div style={S.evoCard}>
+        <div style={S.evoCardTitle}>
+          <span style={{ color: blockColor }}>SALVAR SNAPSHOTS</span>
+        </div>
+        <div style={S.evoSaveText}>
+          Quando terminar de preencher os dados, salve pra travar os valores e criar um marco do ciclo.
+        </div>
+
+        {/* SNAPSHOT INICIAL */}
+        <div style={S.evoSaveBlock}>
+          <div style={S.evoSaveHeader}>
+            <div>
+              <div style={S.evoSaveLabel}>DADOS INICIAIS</div>
+              <div style={S.evoSaveCount}>{startFilledCount} de {totalFields} preenchidos</div>
+            </div>
+            {startSaved && (
+              <div style={S.evoSavedBadge}>
+                <CheckCircle2 size={12}/>
+                <span>SALVO {formatDateTime(profile.startSavedAt)}</span>
+              </div>
+            )}
+          </div>
+          {!startSaved ? (
+            <button
+              onClick={saveStart}
+              disabled={startFilledCount === 0}
+              style={{
+                ...S.evoSaveBtn,
+                background: startFilledCount === 0 ? '#1f1f1f' : blockColor,
+                color: startFilledCount === 0 ? '#525252' : '#0a0a0a',
+                cursor: startFilledCount === 0 ? 'not-allowed' : 'pointer',
+              }}
+            >
+              SALVAR DADOS INICIAIS
+            </button>
+          ) : (
+            <button onClick={unsaveStart} style={S.evoUnsaveBtn}>
+              <Edit3 size={12}/>
+              <span>EDITAR DADOS INICIAIS</span>
+            </button>
+          )}
+        </div>
+
+        {/* SNAPSHOT FINAL */}
+        <div style={S.evoSaveBlock}>
+          <div style={S.evoSaveHeader}>
+            <div>
+              <div style={S.evoSaveLabel}>DADOS FINAIS</div>
+              <div style={S.evoSaveCount}>{endFilledCount} de {totalFields} preenchidos</div>
+            </div>
+            {endSaved && (
+              <div style={S.evoSavedBadge}>
+                <CheckCircle2 size={12}/>
+                <span>SALVO {formatDateTime(profile.endSavedAt)}</span>
+              </div>
+            )}
+          </div>
+          {!endSaved ? (
+            <button
+              onClick={saveEnd}
+              disabled={endFilledCount === 0}
+              style={{
+                ...S.evoSaveBtn,
+                background: endFilledCount === 0 ? '#1f1f1f' : '#22c55e',
+                color: endFilledCount === 0 ? '#525252' : '#0a0a0a',
+                cursor: endFilledCount === 0 ? 'not-allowed' : 'pointer',
+              }}
+            >
+              SALVAR DADOS FINAIS
+            </button>
+          ) : (
+            <button onClick={unsaveEnd} style={S.evoUnsaveBtn}>
+              <Edit3 size={12}/>
+              <span>EDITAR DADOS FINAIS</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* RELATÓRIO FINAL */}
+      <FinalReport profile={profile} blockColor={blockColor}/>
+    </div>
+  );
+}
+
+function EvoField({ label, value, onChange, placeholder, type = 'text', locked = false }) {
+  return (
+    <div>
+      <div style={S.evoFieldLabel}>{label}</div>
+      <input
+        type={type}
+        inputMode={type === 'date' ? undefined : 'decimal'}
+        value={value}
+        placeholder={placeholder}
+        disabled={locked}
+        onChange={e => onChange(e.target.value)}
+        style={{ ...S.evoInput, ...(locked ? S.inputLocked : {}) }}
+      />
+    </div>
+  );
+}
+
+function MetricRow({ label, unit, startValue, endValue, onStartChange, onEndChange, shouldReduce, highlight, startLocked, endLocked }) {
+  const start = parseFloat(startValue);
+  const end = parseFloat(endValue);
+  const hasComparison = !isNaN(start) && !isNaN(end);
+  const diff = hasComparison ? end - start : null;
+  const pctChange = hasComparison && start !== 0 ? ((end - start) / start) * 100 : null;
+
+  let diffColor = '#737373';
+  if (hasComparison && diff !== 0) {
+    if (shouldReduce) {
+      diffColor = diff < 0 ? '#22c55e' : '#ef4444';
+    } else {
+      diffColor = label === 'PESO' ? '#a3a3a3' : (diff > 0 ? '#22c55e' : '#ef4444');
+    }
+  }
+
+  return (
+    <div style={{ ...S.metricRow, ...(highlight ? S.metricRowHighlight : {}) }}>
+      <div style={S.metricLabel}>
+        <span>{label}</span>
+        <span style={S.metricUnit}>{unit}</span>
+      </div>
+      <div style={S.metricInputs}>
+        <div>
+          <div style={S.metricColLabel}>INÍCIO</div>
+          <input
+            type="text" inputMode="decimal"
+            value={startValue}
+            disabled={startLocked}
+            onChange={e => onStartChange(e.target.value)}
+            placeholder="—"
+            style={{ ...S.evoInput, ...(startLocked ? S.inputLocked : {}) }}
+          />
+        </div>
+        <div>
+          <div style={S.metricColLabel}>FIM</div>
+          <input
+            type="text" inputMode="decimal"
+            value={endValue}
+            disabled={endLocked}
+            onChange={e => onEndChange(e.target.value)}
+            placeholder="—"
+            style={{ ...S.evoInput, ...(endLocked ? S.inputLocked : {}) }}
+          />
+        </div>
+        <div>
+          <div style={S.metricColLabel}>Δ</div>
+          <div style={{ ...S.metricDiff, color: diffColor }}>
+            {hasComparison ? (
+              <>
+                {diff === 0 ? <Minus size={12}/> : diff > 0 ? <ArrowUp size={12}/> : <ArrowDown size={12}/>}
+                <span>{Math.abs(diff).toFixed(1)}</span>
+              </>
+            ) : <span style={{ color: '#404040' }}>—</span>}
+          </div>
+          {pctChange !== null && (
+            <div style={{ ...S.metricDiffPct, color: diffColor }}>
+              {pctChange > 0 ? '+' : ''}{pctChange.toFixed(1)}%
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MeasurementRow({ label, startValue, endValue, onStartChange, onEndChange, shouldReduce, highlight, startLocked, endLocked }) {
+  const start = parseFloat(startValue);
+  const end = parseFloat(endValue);
+  const hasComparison = !isNaN(start) && !isNaN(end);
+  const diff = hasComparison ? end - start : null;
+
+  let diffColor = '#737373';
+  if (hasComparison && diff !== 0) {
+    if (shouldReduce) {
+      diffColor = diff < 0 ? '#22c55e' : '#ef4444';
+    } else {
+      diffColor = diff > 0 ? '#22c55e' : (diff < 0 ? '#fbbf24' : '#737373');
+    }
+  }
+
+  return (
+    <div style={{ ...S.measureRow, ...(highlight ? S.measureRowHighlight : {}) }}>
+      <span style={{ ...S.evoMeasureLabel, ...(highlight ? { color: '#fafafa', fontWeight: 600 } : {}) }}>{label}</span>
+      <input
+        type="text" inputMode="decimal"
+        value={startValue}
+        disabled={startLocked}
+        onChange={e => onStartChange(e.target.value)}
+        placeholder="—"
+        style={{ ...S.evoInputSmall, ...(startLocked ? S.inputLocked : {}) }}
+      />
+      <input
+        type="text" inputMode="decimal"
+        value={endValue}
+        disabled={endLocked}
+        onChange={e => onEndChange(e.target.value)}
+        placeholder="—"
+        style={{ ...S.evoInputSmall, ...(endLocked ? S.inputLocked : {}) }}
+      />
+      <div style={{ ...S.measureDiff, color: diffColor }}>
+        {hasComparison ? (
+          <>
+            {diff === 0 ? <Minus size={10}/> : diff > 0 ? <ArrowUp size={10}/> : <ArrowDown size={10}/>}
+            <span>{Math.abs(diff).toFixed(1)}</span>
+          </>
+        ) : <span style={{ color: '#404040', fontSize: 11 }}>—</span>}
+      </div>
+    </div>
+  );
+}
+
+function FinalReport({ profile, blockColor }) {
+  // Conta quantas medidas tem dados completos (start + end)
+  const completeCount = useMemo(() => {
+    let count = 0;
+    if (profile.weight.start && profile.weight.end) count++;
+    if (profile.bodyFat.start && profile.bodyFat.end) count++;
+    if (profile.vo2max.start && profile.vo2max.end) count++;
+    MEASUREMENTS.forEach(m => {
+      const v = profile.measurements[m.id];
+      if (v?.start && v?.end) count++;
+    });
+    return count;
+  }, [profile]);
+
+  const totalFields = 3 + MEASUREMENTS.length; // peso, bf, vo2max + medidas
+
+  // Destaque: maior redução em medida que deveria reduzir
+  const highlights = useMemo(() => {
+    const list = [];
+
+    const weight = { start: parseFloat(profile.weight.start), end: parseFloat(profile.weight.end) };
+    if (!isNaN(weight.start) && !isNaN(weight.end) && weight.start !== weight.end) {
+      list.push({ label: 'Peso', diff: weight.end - weight.start, unit: 'kg', shouldReduce: true });
+    }
+
+    const bf = { start: parseFloat(profile.bodyFat.start), end: parseFloat(profile.bodyFat.end) };
+    if (!isNaN(bf.start) && !isNaN(bf.end) && bf.start !== bf.end) {
+      list.push({ label: '% Gordura', diff: bf.end - bf.start, unit: '%', shouldReduce: true });
+    }
+
+    MEASUREMENTS.forEach(m => {
+      const v = profile.measurements[m.id];
+      const s = parseFloat(v?.start);
+      const e = parseFloat(v?.end);
+      if (!isNaN(s) && !isNaN(e) && s !== e) {
+        const sr = SHOULD_REDUCE.includes(m.id);
+        list.push({ label: m.label, diff: e - s, unit: 'cm', shouldReduce: sr });
+      }
+    });
+
+    // Ordena por impacto absoluto
+    return list.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  }, [profile]);
+
+  if (completeCount === 0) {
+    return (
+      <div style={S.evoCard}>
+        <div style={S.evoCardTitle}>
+          <span style={{ color: blockColor }}>RELATÓRIO FINAL</span>
+        </div>
+        <div style={S.reportEmpty}>
+          Preencha INÍCIO e FIM de pelo menos uma métrica pra ver a comparação aqui.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.evoCard}>
+      <div style={S.evoCardTitle}>
+        <span style={{ color: blockColor }}>RELATÓRIO FINAL</span>
+        <span style={S.reportCount}>{completeCount}/{totalFields} preenchidas</span>
+      </div>
+      <div style={S.reportList}>
+        {highlights.slice(0, 8).map((h, i) => {
+          const isPositive = h.shouldReduce ? h.diff < 0 : h.diff > 0;
+          const color = isPositive ? '#22c55e' : '#ef4444';
+          return (
+            <div key={i} style={S.reportRow}>
+              <span style={S.reportLabel}>{h.label}</span>
+              <div style={{ ...S.reportDiff, color }}>
+                {h.diff < 0 ? <ArrowDown size={12}/> : <ArrowUp size={12}/>}
+                <span>{Math.abs(h.diff).toFixed(1)} {h.unit}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1130,6 +2274,9 @@ const S = {
   statBig: { fontFamily: "'JetBrains Mono', monospace", fontSize: 26, fontWeight: 700, lineHeight: 1 },
   statLabel: { fontSize: 9, color: '#525252', letterSpacing: '0.2em', textTransform: 'uppercase', marginTop: 4 },
 
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, marginBottom: 10 },
+  sectionHeaderText: { fontSize: 10, color: '#737373', letterSpacing: '0.3em', fontWeight: 700 },
+
   exercises: { display: 'flex', flexDirection: 'column', gap: 10 },
   warmupCard: { background: 'rgba(245, 158, 11, 0.06)', border: '1px dashed #422006', borderRadius: 6, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 },
   warmupText: { fontSize: 11, color: '#a3a3a3', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 500 },
@@ -1153,6 +2300,30 @@ const S = {
   inputLocked: { background: '#0a0a0a', color: '#737373', opacity: 0.7 },
   checkBtn: { background: '#0a0a0a', border: '1px solid #262626', borderRadius: 4, width: '100%', height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fafafa', transition: 'all 0.15s' },
   checkBtnDone: { background: '#22c55e', border: '1px solid #22c55e', color: '#0a0a0a' },
+  checkBtnWide: {
+    background: '#0a0a0a', border: '1px solid #262626', borderRadius: 4, padding: '10px 16px',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fafafa',
+    transition: 'all 0.15s', gridColumn: 'span 4', marginTop: 4,
+  },
+
+  cardioGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, 1fr)',
+    gap: 8,
+    marginTop: 8,
+  },
+  cardioFieldWrap: { display: 'flex', flexDirection: 'column', gap: 4 },
+  cardioFieldLabel: { fontSize: 9, color: '#525252', letterSpacing: '0.2em', fontWeight: 600, textAlign: 'center' },
+
+  statsCardGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 12,
+  },
+  statsCardHint: {
+    fontSize: 10, color: '#525252', marginTop: 10,
+    lineHeight: 1.5, fontStyle: 'italic',
+  },
 
   completeWrap: { marginTop: 20, marginBottom: 8 },
   completeBtn: {
@@ -1177,9 +2348,49 @@ const S = {
 
   progressWrap: { position: 'relative', zIndex: 1, padding: '20px', maxWidth: 720, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 12 },
   statsRow: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 },
-  statCard: { background: '#141414', border: '1px solid #1f1f1f', borderRadius: 8, padding: '14px 10px', textAlign: 'center' },
+
+  // Seletor de período (PROGRESSO)
+  periodSelector: {
+    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6,
+    padding: 4, background: '#0f0f0f', border: '1px solid #1f1f1f', borderRadius: 8,
+  },
+  periodBtn: {
+    background: 'transparent', border: 'none', borderRadius: 6,
+    padding: '10px 6px', color: '#737373',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+    transition: 'all 0.15s',
+  },
+  periodBtnActive: {
+    background: '#1f1f1f', color: '#fafafa',
+  },
+  periodBtnLabel: { fontSize: 10, fontWeight: 700, letterSpacing: '0.2em' },
+  periodBtnSublabel: { fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: '#525252' },
+  periodHeader: { padding: '4px 0' },
+  periodHeaderLabel: { fontFamily: "'Anton', sans-serif", fontSize: 22, letterSpacing: '0.04em', lineHeight: 1 },
+  periodHeaderSubtitle: { fontSize: 11, color: '#737373', marginTop: 4, fontFamily: "'JetBrains Mono', monospace" },
+
+  // Card de média por dia (pra nutri)
+  avgCard: {
+    background: 'rgba(239, 68, 68, 0.04)', border: '1px solid #7f1d1d',
+    borderRadius: 10, padding: 16,
+  },
+  avgCardHeader: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 14,
+  },
+  avgCardLabel: { fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', color: '#ef4444' },
+  avgCardCount: { fontSize: 10, color: '#737373', fontFamily: "'JetBrains Mono', monospace" },
+  avgCardGrid: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-around',
+  },
+  avgItem: { textAlign: 'center', flex: 1 },
+  avgItemValue: { fontFamily: "'Anton', sans-serif", fontSize: 28, color: '#fafafa', lineHeight: 1 },
+  avgItemLabel: { fontSize: 9, color: '#737373', letterSpacing: '0.15em', marginTop: 6, textTransform: 'uppercase' },
+  avgItemDivider: { width: 1, height: 32, background: '#262626' },
+
+  statCard: { background: '#141414', border: '1px solid #1f1f1f', borderRadius: 8, padding: '14px 8px', textAlign: 'center' },
   statCardLabel: { fontSize: 9, color: '#525252', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 6 },
-  statCardValue: { fontFamily: "'Anton', sans-serif", fontSize: 26, letterSpacing: '0.02em', lineHeight: 1 },
+  statCardValue: { fontFamily: "'Anton', sans-serif", fontSize: 24, letterSpacing: '0.02em', lineHeight: 1 },
   statCardSub: { fontSize: 10, color: '#737373', marginTop: 4, fontFamily: "'JetBrains Mono', monospace" },
   chartCard: { background: '#141414', border: '1px solid #1f1f1f', borderRadius: 10, padding: 16 },
   chartHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
@@ -1227,4 +2438,94 @@ const S = {
   modalCancel: { flex: 1, background: 'transparent', border: '1px solid #262626', color: '#fafafa', padding: '10px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600 },
   modalConfirm: { flex: 1, background: '#ef4444', border: '1px solid #ef4444', color: '#0a0a0a', padding: '10px 16px', borderRadius: 6, fontSize: 13, fontWeight: 700 },
   modalConfirmGreen: { flex: 1, background: '#22c55e', border: '1px solid #22c55e', color: '#0a0a0a', padding: '10px 16px', borderRadius: 6, fontSize: 13, fontWeight: 700 },
+
+  // EVOLUÇÃO
+  evoWrap: { position: 'relative', zIndex: 1, padding: '20px', maxWidth: 720, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 12 },
+  evoIntro: { padding: '0 0 8px' },
+  evoIntroTitle: { fontFamily: "'Anton', sans-serif", fontSize: 28, letterSpacing: '0.04em', lineHeight: 1, marginBottom: 8 },
+  evoIntroText: { fontSize: 12, color: '#a3a3a3', lineHeight: 1.5 },
+
+  // BANNER DO CICLO (aba TREINO)
+  cycleBanner: {
+    position: 'relative', zIndex: 1, maxWidth: 680,
+    margin: '16px 20px 0', padding: '12px 16px',
+    border: '1px solid #1f1f1f', borderRadius: 8, background: '#0f0f0f',
+  },
+  cycleBannerInner: { display: 'flex', alignItems: 'center', gap: 16 },
+  cycleNumberWrap: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    padding: '6px 14px', borderRight: '1px solid #262626',
+  },
+  cycleNumberLabel: { fontSize: 9, color: '#525252', letterSpacing: '0.25em', fontWeight: 700, marginBottom: 2 },
+  cycleNumber: { fontFamily: "'Anton', sans-serif", fontSize: 26, letterSpacing: '0.04em', lineHeight: 1, color: '#fafafa' },
+  cycleDates: { fontSize: 13, color: '#fafafa', fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 },
+  cycleSubtitle: { fontSize: 10, color: '#737373', letterSpacing: '0.15em', textTransform: 'uppercase', marginTop: 4 },
+  cycleLinkBadge: {
+    fontSize: 9, color: '#737373', fontWeight: 500,
+    letterSpacing: '0.1em', textTransform: 'lowercase',
+  },
+  evoCard: { background: '#141414', border: '1px solid #1f1f1f', borderRadius: 10, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
+  evoCardTitle: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', marginBottom: 4 },
+  evoFieldGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 },
+  evoFieldLabel: { fontSize: 9, color: '#525252', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 4 },
+  evoFieldStatic: { background: '#0a0a0a', border: '1px dashed #262626', borderRadius: 4, padding: '8px 10px', fontSize: 14, fontWeight: 500, color: '#a3a3a3', textAlign: 'center', fontFamily: "'JetBrains Mono', monospace" },
+  evoInput: { background: '#0a0a0a', border: '1px solid #262626', borderRadius: 4, padding: '8px 10px', color: '#fafafa', fontSize: 14, fontWeight: 500, textAlign: 'center', width: '100%', fontFamily: "'JetBrains Mono', monospace" },
+  evoInputSmall: { background: '#0a0a0a', border: '1px solid #262626', borderRadius: 4, padding: '6px 6px', color: '#fafafa', fontSize: 12, fontWeight: 500, textAlign: 'center', width: '100%', fontFamily: "'JetBrains Mono', monospace" },
+  evoCountdown: { fontSize: 12, color: '#a3a3a3', textAlign: 'center', padding: '8px', background: '#0a0a0a', borderRadius: 6, marginTop: 4 },
+  evoSelect: { background: '#0a0a0a', border: '1px solid #262626', borderRadius: 4, padding: '8px 10px', color: '#fafafa', fontSize: 13, width: '100%', fontFamily: "'IBM Plex Sans', sans-serif" },
+  evoMethodSelect: { padding: '8px 0' },
+  evoMethodHint: { fontSize: 10, color: '#525252', marginTop: 6, fontStyle: 'italic' },
+
+  metricRow: { padding: '12px 0', borderBottom: '1px solid #1f1f1f' },
+  metricRowHighlight: { background: 'rgba(245, 158, 11, 0.03)', margin: '0 -16px', padding: '12px 16px' },
+  metricLabel: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 },
+  metricUnit: { fontSize: 10, color: '#525252', fontFamily: "'JetBrains Mono', monospace" },
+  metricInputs: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 },
+  metricColLabel: { fontSize: 9, color: '#525252', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 4, textAlign: 'center' },
+  metricDiff: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, fontSize: 14, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", height: 34, border: '1px solid #1f1f1f', borderRadius: 4, background: '#0a0a0a' },
+  metricDiffPct: { fontSize: 9, textAlign: 'center', marginTop: 3, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 },
+
+  evoMeasurementsHeader: { display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr 0.8fr', gap: 8, paddingBottom: 6, borderBottom: '1px solid #1f1f1f' },
+  evoMeasureColHeader: { fontSize: 9, color: '#525252', letterSpacing: '0.2em', fontWeight: 600, textAlign: 'center' },
+  evoMeasureLabel: { fontSize: 12, color: '#a3a3a3', display: 'flex', alignItems: 'center' },
+  measureRow: { display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr 0.8fr', gap: 8, alignItems: 'center', padding: '6px 0' },
+  measureRowHighlight: { background: 'rgba(245, 158, 11, 0.04)', margin: '0 -8px', padding: '6px 8px', borderRadius: 4 },
+  measureDiff: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, fontSize: 12, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" },
+
+  reportEmpty: { fontSize: 12, color: '#525252', textAlign: 'center', padding: 16, fontStyle: 'italic' },
+  reportList: { display: 'flex', flexDirection: 'column', gap: 6 },
+  reportRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: '#0a0a0a', borderRadius: 4 },
+  reportLabel: { fontSize: 12, color: '#d4d4d4' },
+  reportDiff: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" },
+  reportCount: { fontSize: 10, color: '#525252', letterSpacing: '0.1em', fontWeight: 500 },
+
+  // Botões de salvar snapshot
+  evoSaveText: { fontSize: 11, color: '#a3a3a3', lineHeight: 1.5, marginBottom: 4 },
+  evoSaveBlock: {
+    background: '#0a0a0a', border: '1px solid #1f1f1f', borderRadius: 8, padding: 14,
+    display: 'flex', flexDirection: 'column', gap: 12,
+  },
+  evoSaveHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+  evoSaveLabel: { fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', color: '#fafafa' },
+  evoSaveCount: { fontSize: 10, color: '#737373', fontFamily: "'JetBrains Mono', monospace", marginTop: 4 },
+  evoSavedBadge: {
+    display: 'flex', alignItems: 'center', gap: 4,
+    fontSize: 9, color: '#22c55e', fontWeight: 700, letterSpacing: '0.1em',
+    fontFamily: "'JetBrains Mono', monospace",
+    padding: '4px 8px', border: '1px solid #14532d', borderRadius: 3,
+    background: 'rgba(34, 197, 94, 0.08)',
+  },
+  evoSaveBtn: {
+    width: '100%', border: 'none', borderRadius: 6, padding: '12px 16px',
+    fontSize: 12, fontWeight: 800, letterSpacing: '0.2em',
+    fontFamily: "'IBM Plex Sans', sans-serif",
+    transition: 'all 0.15s',
+  },
+  evoUnsaveBtn: {
+    width: '100%', background: 'transparent', border: '1px solid #262626',
+    color: '#a3a3a3', padding: '10px 16px', borderRadius: 6,
+    fontSize: 11, fontWeight: 700, letterSpacing: '0.2em',
+    fontFamily: "'JetBrains Mono', monospace",
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
 };
